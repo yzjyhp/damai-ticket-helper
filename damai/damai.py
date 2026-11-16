@@ -84,7 +84,8 @@ def load_config():
         config['if_commit_order'],
         config.get('max_retries', 1000),
         config.get('fast_mode', True),  # 默认启用快速模式
-        config.get('page_load_delay', 2)  # 默认2秒
+        config.get('page_load_delay', 2),  # 默认2秒
+        config.get('submit_max_retries', 10)  # 提交订单最大重试次数（0=无限重试）
     )
 
 

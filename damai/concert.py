@@ -837,14 +837,22 @@ class Concert:
             return False
 
     def _submit_order(self):
-        """提交订单（带重试：最多3次，每次间隔0.5秒）"""
+        """提交订单（循环提交直到成功或达到最大次数，次数从 config.submit_max_retries 读取，0=无限重试）"""
         print('***准备提交订单***\n')
+
+        max_retries = self.config.submit_max_retries
+        infinite = (max_retries <= 0)
 
         submit_button_texts = ['立即提交', '提交订单', '提交', '确认', '立即支付', '去支付', '支付',
                                '确认订单', '确定', '立即付款']
 
-        for attempt in range(1, 4):
-            print(f"  第 {attempt}/3 次尝试提交...")
+        attempt = 0
+        while infinite or attempt < max_retries:
+            attempt += 1
+            if infinite:
+                print(f"  第 {attempt} 次尝试提交...")
+            else:
+                print(f"  第 {attempt}/{max_retries} 次尝试提交...")
             self._scan_submit_buttons()
 
             if (self._try_submit_by_text(submit_button_texts) or
@@ -853,11 +861,15 @@ class Concert:
                 self._try_submit_by_original_xpath()):
                 return
 
-            if attempt < 3:
+            if infinite:
+                print(f"  ⚠ 第 {attempt} 次提交失败，继续重试...\n")
+                time.sleep(0.5)
+            elif attempt < max_retries:
                 print(f"  ⚠ 第 {attempt} 次提交失败，0.5秒后重试...\n")
                 time.sleep(0.5)
 
-        print(f"  ⚠ 所有方法都失败，请手动点击提交按钮\n")
+        if not infinite:
+            print(f"  ⚠ 已尝试 {max_retries} 次均失败，请手动点击提交按钮\n")
 
     def commit_order(self):
         """提交订单"""

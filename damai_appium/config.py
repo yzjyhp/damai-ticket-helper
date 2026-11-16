@@ -19,7 +19,7 @@ DEFAULT_DELAYS = {
 
 
 class Config:
-    def __init__(self, server_url, device_name, platform_version, keyword, users, city, date, session_index, price, price_index, if_commit_order, delays=None):
+    def __init__(self, server_url, device_name, platform_version, keyword, users, city, date, session_index, price, price_index, if_commit_order, delays=None, submit_max_retries=10):
         self.server_url = server_url
         self.device_name = device_name
         self.platform_version = platform_version
@@ -31,6 +31,7 @@ class Config:
         self.price = price
         self.price_index = price_index
         self.if_commit_order = if_commit_order
+        self.submit_max_retries = submit_max_retries  # 提交订单最大重试次数（0=无限重试）
         self.delays = dict(DEFAULT_DELAYS)
         if delays:
             self.delays.update({k: float(v) for k, v in delays.items() if v is not None})
@@ -54,4 +55,5 @@ class Config:
                       config['price'],
                       config['price_index'],
                       config['if_commit_order'],
-                      config.get('delays'))
+                      config.get('delays'),
+                      config.get('submit_max_retries', 10))

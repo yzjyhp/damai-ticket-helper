@@ -13,6 +13,7 @@
   "price": "380",
   "price_index": 0,
   "if_commit_order": true,
+  "submit_max_retries": 10,
   "delays": {
     "poll": 0.2,
     "refresh": 2.0,

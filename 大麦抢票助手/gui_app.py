@@ -203,6 +203,9 @@ class GrabbingApp:
         L(grid, "自动提交订单", size=9).grid(row=2, column=4, sticky="w", padx=4)
         self.vars["if_commit_order"] = tk.BooleanVar(value=True)
         reg(ttk.Checkbutton(grid, text="", variable=self.vars["if_commit_order"]), size=9).grid(row=2, column=5, sticky="w")
+        L(grid, "提交重试(0=无限)", size=9).grid(row=2, column=6, sticky="w", padx=4)
+        self.vars["submit_max_retries"] = tk.StringVar(value="10")
+        reg(ttk.Entry(grid, textvariable=self.vars["submit_max_retries"], width=5), size=9).grid(row=2, column=7, sticky="w", padx=4)
         btns = ttk.Frame(cfg)
         btns.pack(fill="x", pady=4)
         reg(ttk.Button(btns, text="保存配置", command=self.save_config), size=9).pack(side="left", padx=4)
@@ -346,6 +349,7 @@ class GrabbingApp:
             self.vars["price_index"].set(str(int(c.get("price_index", 0)) + 1))
             self.vars["users"].set(",".join(c.get("users", [])))
             self.vars["if_commit_order"].set(bool(c.get("if_commit_order", True)))
+            self.vars["submit_max_retries"].set(str(c.get("submit_max_retries", 10)))
             # 间隔设置（内部存秒，界面显示毫秒）
             delays = c.get("delays", {})
             for key, var in self.delay_vars.items():
@@ -384,6 +388,7 @@ class GrabbingApp:
                 "price": self.vars["price"].get().strip(),
                 "price_index": max(int(self.vars["price_index"].get() or 1) - 1, 0),
                 "if_commit_order": bool(self.vars["if_commit_order"].get()),
+                "submit_max_retries": max(int(self.vars["submit_max_retries"].get() or 0), 0),
                 "delays": {key: max(float(var.get() or 1), 1) / 1000.0
                            for key, var in self.delay_vars.items()},
             }

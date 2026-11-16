@@ -145,9 +145,12 @@ class DamaiBot:
                 continue
         return False
 
-    def _submit_order(self, max_retries=3):
-        """提交订单：多策略查找提交按钮 + 可点击等待 + 坐标/原生双重点击 + 重试"""
-        print("提交订单...")
+    def _submit_order(self):
+        """提交订单：循环提交直到成功或达到最大次数。
+        最大次数从 config.submit_max_retries 读取（0=无限重试）"""
+        max_retries = self.config.submit_max_retries
+        infinite = (max_retries <= 0)
+        print(f"提交订单（最大重试: {'无限' if infinite else max_retries} 次）...")
 
         # 提交按钮的选择器列表（按优先级排序）
         # 1. 精确文本匹配：大麦订单确认页的标准按钮文案
@@ -171,8 +174,13 @@ class DamaiBot:
             (By.XPATH, '//*[contains(@text,"提交") or contains(@text,"确认") or contains(@text,"付款")]'),
         ]
 
-        for attempt in range(1, max_retries + 1):
-            print(f"  第 {attempt}/{max_retries} 次尝试提交...")
+        attempt = 0
+        while infinite or attempt < max_retries:
+            attempt += 1
+            if infinite:
+                print(f"  第 {attempt} 次尝试提交...")
+            else:
+                print(f"  第 {attempt}/{max_retries} 次尝试提交...")
 
             for sel_by, sel_value in submit_selectors:
                 try:
@@ -209,9 +217,14 @@ class DamaiBot:
                 time.sleep(0.5)
 
             # 所有选择器都没找到可点击的提交按钮
-            print(f"  ⚠ 第 {attempt} 次未找到可点击的提交按钮")
+            if infinite:
+                print(f"  ⚠ 第 {attempt} 次未找到可点击的提交按钮，继续重试...")
+            elif attempt < max_retries:
+                print(f"  ⚠ 第 {attempt} 次未找到可点击的提交按钮，0.5秒后重试...")
+                time.sleep(0.5)
 
-        print("⚠ 提交按钮多次尝试均失败，请手动点击提交按钮")
+        if not infinite:
+            print(f"⚠ 提交按钮已尝试 {max_retries} 次均失败，请手动点击提交按钮")
         return False
 
     def _check_payment_page(self, timeout=2):
