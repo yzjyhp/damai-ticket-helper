@@ -134,18 +134,57 @@ def extract_env_with_splash(zip_path, env_dir):
                 if i % 500 == 0 or i == total:
                     splash.update_progress(i, total)
 
+        splash.set_status("修复环境配置...")
+        _fix_extensions_paths(env_dir)
+
         splash.set_status("环境准备完成！")
         time.sleep(0.5)
     finally:
         splash.close()
 
 
+def _fix_extensions_paths(env_dir):
+    """修正 Appium extensions.yaml 中硬编码的旧路径为当前实际路径"""
+    # extensions.yaml 可能存在的位置
+    yaml_paths = [
+        os.path.join(env_dir, 'appium', '.appium', 'node_modules', '.cache', 'appium', 'extensions.yaml'),
+        os.path.join(env_dir, 'appium', 'node_modules', '.cache', 'appium', 'extensions.yaml'),
+    ]
+
+    for yaml_path in yaml_paths:
+        if not os.path.isfile(yaml_path):
+            continue
+        try:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            # 当前正确的 .appium 路径（统一用反斜杠，和 yaml 里一致）
+            correct_appium_home = os.path.join(env_dir, 'appium', '.appium').replace('/', '\\')
+
+            changed = False
+            for i, line in enumerate(lines):
+                if 'installPath' in line and '.appium' in line:
+                    # 保留 .appium 之后的部分（\node_modules\...），替换之前的路径
+                    idx = line.find('.appium')
+                    after_appium = line[idx + len('.appium'):]
+                    lines[i] = f'    installPath: {correct_appium_home}{after_appium}'
+                    changed = True
+
+            if changed:
+                with open(yaml_path, 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+
+        except Exception:
+            pass
+
+
 def ensure_env():
     """确保 env 已解压到本地，首次解压时显示进度窗口"""
     env_dir = get_env_dir()
 
-    # 已完整 → 直接用，不显示窗口
+    # 已完整 → 修正路径后直接用（env 可能是从别处复制来的，路径不一致）
     if env_is_complete(env_dir):
+        _fix_extensions_paths(env_dir)
         return env_dir
 
     # 不完整 → 从 exe 内嵌 zip 解压（带进度窗口）
