@@ -745,12 +745,17 @@ class Concert:
         print()
 
     def _try_submit_by_text(self, submit_button_texts):
-        """方法1-2: 通过元素文本查找"""
+        """方法1-2: 通过元素文本查找（带显式等待，避免页面未加载完就失败）"""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+
         for btn_text in submit_button_texts:
             for tag in ['button', 'div', 'span']:
                 try:
                     xpath = f"//{tag}[contains(text(), '{btn_text}')]"
-                    submit_btn = self.driver.find_element(By.XPATH, xpath)
+                    submit_btn = WebDriverWait(self.driver, 2).until(
+                        EC.element_to_be_clickable((By.XPATH, xpath))
+                    )
                     print(f"  ✓ 找到<{tag}>: {btn_text}")
                     submit_btn.click()
                     print('***订单已提交***\n')
@@ -761,7 +766,9 @@ class Concert:
             # 尝试精确匹配
             try:
                 xpath = f"//span[text()='{btn_text}']"
-                submit_btn = self.driver.find_element(By.XPATH, xpath)
+                submit_btn = WebDriverWait(self.driver, 1).until(
+                    EC.element_to_be_clickable((By.XPATH, xpath))
+                )
                 print(f"  ✓ 找到<span>(精确匹配): {btn_text}")
                 try:
                     parent = submit_btn.find_element(By.XPATH, '..')
@@ -789,7 +796,10 @@ class Concert:
             return False
 
     def _try_submit_by_class(self):
-        """方法4: 通过class查找"""
+        """方法4: 通过class查找（带显式等待）"""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+
         submit_button_classes = [
             'submit-button',
             'submit-btn',
@@ -801,7 +811,9 @@ class Concert:
         for class_name in submit_button_classes:
             try:
                 xpath = f"//*[contains(@class, '{class_name}')]"
-                submit_btn = self.driver.find_element(By.XPATH, xpath)
+                submit_btn = WebDriverWait(self.driver, 1).until(
+                    EC.element_to_be_clickable((By.XPATH, xpath))
+                )
                 print(f"  ✓ 通过class找到按钮: {class_name}")
                 submit_btn.click()
                 print('***订单已提交***\n')
@@ -825,19 +837,25 @@ class Concert:
             return False
 
     def _submit_order(self):
-        """提交订单"""
+        """提交订单（带重试：最多3次，每次间隔0.5秒）"""
         print('***准备提交订单***\n')
 
-        self._scan_submit_buttons()
+        submit_button_texts = ['立即提交', '提交订单', '提交', '确认', '立即支付', '去支付', '支付',
+                               '确认订单', '确定', '立即付款']
 
-        submit_button_texts = ['立即提交', '提交订单', '提交', '确认', '立即支付', '去支付', '支付']
+        for attempt in range(1, 4):
+            print(f"  第 {attempt}/3 次尝试提交...")
+            self._scan_submit_buttons()
 
-        # 尝试多种方法提交
-        if (self._try_submit_by_text(submit_button_texts) or
-            self._try_submit_by_view_name() or
-            self._try_submit_by_class() or
-            self._try_submit_by_original_xpath()):
-            return
+            if (self._try_submit_by_text(submit_button_texts) or
+                self._try_submit_by_view_name() or
+                self._try_submit_by_class() or
+                self._try_submit_by_original_xpath()):
+                return
+
+            if attempt < 3:
+                print(f"  ⚠ 第 {attempt} 次提交失败，0.5秒后重试...\n")
+                time.sleep(0.5)
 
         print(f"  ⚠ 所有方法都失败，请手动点击提交按钮\n")
 

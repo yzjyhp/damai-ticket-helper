@@ -111,8 +111,8 @@ while driver.find_elements(by=By.XPATH,
                     break
         # 提交订单
         if driver.find_elements(by=AppiumBy.ANDROID_UIAUTOMATOR,
-                                value='new UiSelector().text("提交订单")') and config.if_commit_order:
-            driver.find_element(by=AppiumBy.ANDROID_UIAUTOMATOR, value='new UiSelector().text("提交订单")').click()
+                                value='new UiSelector().textMatches(".*立即购买.*|.*预约.*|.*购买.*")') and config.if_commit_order:
+            driver.find_element(by=AppiumBy.ANDROID_UIAUTOMATOR, value='new UiSelector().textMatches(".*立即购买.*|.*预约.*|.*购买.*")').click()
     if buy_btn == '预约抢票':
         # 预约购票
         driver.find_element(by=By.XPATH,

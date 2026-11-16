@@ -145,6 +145,105 @@ class DamaiBot:
                 continue
         return False
 
+    def _submit_order(self, max_retries=3):
+        """提交订单：多策略查找提交按钮 + 可点击等待 + 坐标/原生双重点击 + 重试"""
+        print("提交订单...")
+
+        # 提交按钮的选择器列表（按优先级排序）
+        # 1. 精确文本匹配：大麦订单确认页的标准按钮文案
+        # 2. 模糊文本匹配：覆盖各种变体
+        # 3. resource ID 匹配：大麦新版UI的提交按钮
+        submit_selectors = [
+            # 精确文本
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("立即提交")'),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("提交订单")'),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("确认订单")'),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("确定")'),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("立即付款")'),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("去支付")'),
+            # 模糊文本
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().textMatches(".*提交.*|.*确认.*|.*付款.*|.*支付.*")'),
+            # resource ID
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("cn.damai:id/btn_submit")'),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("cn.damai:id/submit_btn")'),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceIdMatches(".*submit.*|.*confirm.*|.*pay.*")'),
+            # XPath 兜底
+            (By.XPATH, '//*[contains(@text,"提交") or contains(@text,"确认") or contains(@text,"付款")]'),
+        ]
+
+        for attempt in range(1, max_retries + 1):
+            print(f"  第 {attempt}/{max_retries} 次尝试提交...")
+
+            for sel_by, sel_value in submit_selectors:
+                try:
+                    # 等待元素可点击（而非仅存在），避免点了不可交互的按钮
+                    el = WebDriverWait(self.driver, 2).until(
+                        EC.element_to_be_clickable((sel_by, sel_value))
+                    )
+                except (TimeoutException, Exception):
+                    continue
+
+                # 策略1：坐标点击
+                try:
+                    rect = el.rect
+                    x = rect['x'] + rect['width'] // 2
+                    y = rect['y'] + rect['height'] // 2
+                    self.driver.execute_script("mobile: clickGesture", {
+                        "x": x, "y": y, "duration": 50})
+                    print(f"  ✓ 坐标点击成功: {sel_value[:60]}")
+                except Exception:
+                    pass
+
+                # 策略2：原生 click() 兜底（某些按钮坐标点击不生效）
+                try:
+                    el.click()
+                except Exception:
+                    pass
+
+                # 检测是否跳转支付页
+                if self._check_payment_page():
+                    print("✅ 订单已提交成功！已跳转支付页面，请立即完成付款锁票！")
+                    return True
+
+                # 等待一下再重试
+                time.sleep(0.5)
+
+            # 所有选择器都没找到可点击的提交按钮
+            print(f"  ⚠ 第 {attempt} 次未找到可点击的提交按钮")
+
+        print("⚠ 提交按钮多次尝试均失败，请手动点击提交按钮")
+        return False
+
+    def _check_payment_page(self, timeout=2):
+        """检测是否已跳转到支付页面"""
+        # 检测1：当前 Activity 名包含 pay/payment
+        try:
+            act = self.driver.current_activity
+            if 'pay' in act.lower() or 'cashier' in act.lower() or 'alipay' in act.lower():
+                return True
+        except Exception:
+            pass
+
+        # 检测2：页面出现支付相关文字
+        try:
+            if self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR,
+                'new UiSelector().textMatches(".*立即支付.*|.*确认支付.*|.*付款.*|.*收银台.*")'):
+                return True
+        except Exception:
+            pass
+
+        # 检测3：订单确认页文字消失（说明已跳转）
+        try:
+            if not self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR,
+                'new UiSelector().textMatches("立即提交|确认订单")'):
+                # 且不在选票页
+                if not self._check_on_right_page():
+                    return True
+        except Exception:
+            pass
+
+        return False
+
     def click_container_item(self, container_id, index, timeout=2):
         """新版大麦UI：在指定容器内，按位置点击第 index 个可点击子元素（0开始）；目标在屏幕外时先滚动到可见"""
         try:
@@ -457,28 +556,11 @@ class DamaiBot:
                     print(f"选择用户失败 {user}: {e}")
 
             # 6. 提交订单
-            print("提交订单...")
             if not self.config.if_commit_order:
                 print("配置 if_commit_order=false，已跳过最终提交（试运行模式）")
                 print("抢票流程演练完成，未提交订单")
                 return True
-            submit_selectors = [
-                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("立即提交")'),
-                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().textMatches(".*提交.*|.*确认.*")'),
-                (By.XPATH, '//*[contains(@text,"提交")]')
-            ]
-            if not self.smart_wait_and_click(*submit_selectors[0], submit_selectors[1:], timeout=3):
-                print("提交按钮未找到/未点击")
-            # 检测是否跳转支付页（订单提交成功 = 锁票）
-            time.sleep(1.5)
-            try:
-                act = self.driver.current_activity
-                if 'pay' in act.lower():
-                    print("✅ 订单已提交成功！已跳转支付页面，请立即完成付款锁票！")
-                else:
-                    print("提交后当前页面:", act)
-            except Exception:
-                pass
+            self._submit_order()
 
             end_time = time.time()
             print(f"抢票流程完成，耗时: {end_time - start_time:.2f}秒")
