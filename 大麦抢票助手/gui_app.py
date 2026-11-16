@@ -50,6 +50,16 @@ CONFIG_FILE = os.path.join(SCRIPT_WORKDIR, 'config.jsonc')
 os.chdir(SCRIPT_WORKDIR)
 
 
+def check_node_extra():
+    """额外检测 node.exe 是否可执行（不仅文件存在）"""
+    try:
+        result = subprocess.run([NODE, '--version'], capture_output=True, text=True, timeout=5,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 class GrabbingApp:
     def __init__(self, root):
         self.root = root
@@ -199,13 +209,14 @@ class GrabbingApp:
         L(grid, "观演人(逗号分隔)", size=9).grid(row=2, column=0, sticky="w", padx=4, pady=3)
         self.vars["users"] = tk.StringVar()
         reg(ttk.Entry(grid, textvariable=self.vars["users"], width=24), size=9).grid(
-            row=2, column=1, columnspan=3, sticky="w", padx=4, pady=3)
-        L(grid, "自动提交订单", size=9).grid(row=2, column=4, sticky="w", padx=4)
+            row=2, column=1, columnspan=5, sticky="w", padx=4, pady=3)
+        # 第3行：自动提交订单 + 提交重试次数
+        L(grid, "自动提交订单", size=9).grid(row=3, column=0, sticky="w", padx=4, pady=3)
         self.vars["if_commit_order"] = tk.BooleanVar(value=True)
-        reg(ttk.Checkbutton(grid, text="", variable=self.vars["if_commit_order"]), size=9).grid(row=2, column=5, sticky="w")
-        L(grid, "提交重试(0=无限)", size=9).grid(row=2, column=6, sticky="w", padx=4)
+        reg(ttk.Checkbutton(grid, text="", variable=self.vars["if_commit_order"]), size=9).grid(row=3, column=1, sticky="w", padx=4, pady=3)
+        L(grid, "提交重试(0=无限)", size=9).grid(row=3, column=2, sticky="w", padx=4, pady=3)
         self.vars["submit_max_retries"] = tk.StringVar(value="10")
-        reg(ttk.Entry(grid, textvariable=self.vars["submit_max_retries"], width=5), size=9).grid(row=2, column=7, sticky="w", padx=4)
+        reg(ttk.Entry(grid, textvariable=self.vars["submit_max_retries"], width=5), size=9).grid(row=3, column=3, sticky="w", padx=4, pady=3)
         btns = ttk.Frame(cfg)
         btns.pack(fill="x", pady=4)
         reg(ttk.Button(btns, text="保存配置", command=self.save_config), size=9).pack(side="left", padx=4)
@@ -562,20 +573,64 @@ class GrabbingApp:
         except Exception:
             return False
 
+    def _auto_install_env(self):
+        """自动安装缺失的 env 组件（调用 install_env.py）"""
+        install_script = os.path.join(ROOT, 'install_env.py')
+        if not os.path.exists(install_script):
+            self.log_line("    未找到 install_env.py，跳过自动安装")
+            return False
+        try:
+            # 找 Python 解释器：打包环境用 sys.executable，源码用 python
+            if getattr(sys, 'frozen', False):
+                python_exe = sys.executable
+            else:
+                python_exe = sys.executable
+
+            proc = subprocess.Popen(
+                [python_exe, install_script],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding='utf-8', errors='replace',
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            for line in proc.stdout:
+                self.log_line(f"    {line.rstrip()}")
+            proc.wait()
+            return proc.returncode == 0
+        except Exception as e:
+            self.log_line(f"    自动安装异常: {e}")
+            return False
+
     def check_env(self):
-        """一键检测环境：便携环境/手机/大麦/服务器，自动修复可修复项"""
+        """一键检测环境：便携环境/手机/大麦/服务器，缺失依赖时自动安装"""
         self.log_line("========== 一键检测环境 ==========")
         ok = True
 
-        # 1. 便携环境完整性
-        env_parts = [("Node", NODE), ("Appium", APPIUM_JS), ("adb", ADB)]
-        missing = [name for name, p in env_parts if not os.path.exists(p)]
-        if missing:
-            self.log_line(f"[1] 便携环境: ❌ 缺少 {', '.join(missing)}")
-            self.log_line("    请确认 env 文件夹与「抢票助手.exe」在同一目录（解压完整）")
-            ok = False
+        # 1. 便携环境完整性（Node / Appium / adb / uiautomator2驱动）
+        env_checks = [
+            ("Node", NODE, check_node_extra),
+            ("Appium", APPIUM_JS, None),
+            ("adb", ADB, None),
+            ("uiautomator2驱动", os.path.join(APPIUM_HOME, 'node_modules', 'appium-uiautomator2-driver'), None),
+        ]
+        missing_parts = []
+        for name, path, extra_check in env_checks:
+            exists = os.path.exists(path)
+            if extra_check and not exists:
+                exists = extra_check()
+            if not exists:
+                missing_parts.append(name)
+
+        if missing_parts:
+            missing_str = ', '.join(missing_parts)
+            self.log_line(f"[1] 便携环境: ❌ 缺少 {missing_str}")
+            # 尝试自动安装
+            self.log_line("    正在尝试一键自动安装缺失组件...")
+            if self._auto_install_env():
+                self.log_line("[1] 便携环境: ✅ 自动安装完成")
+            else:
+                self.log_line("[1] 便携环境: ❌ 自动安装失败，请手动运行 install_env.py")
+                ok = False
         else:
-            self.log_line("[1] 便携环境(Node/Appium/adb): ✅ 完整")
+            self.log_line("[1] 便携环境(Node/Appium/adb/uiautomator2): ✅ 完整")
 
         # 2. 手机连接
         dev = self._adb_devices()
