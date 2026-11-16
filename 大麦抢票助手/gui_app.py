@@ -561,7 +561,10 @@ class GrabbingApp:
         else:
             # 确实没在运行 → 启动
             self.start_server()
+        # 立即刷新一次（快速反馈）
         self.refresh_status()
+        # 延迟2秒后再刷新一次（等进程真正退出/启动完成，状态才准确）
+        self.root.after(2000, self.refresh_status)
 
     # ---------- 状态 ----------
     def refresh_status(self):
