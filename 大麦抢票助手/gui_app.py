@@ -9,6 +9,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
+import psutil
 
 APP_TITLE = "大麦抢票助手"
 PORT = 4999
@@ -32,8 +33,10 @@ def app_dir():
 ROOT = app_dir()
 ENV = os.path.join(ROOT, 'env')
 NODE = os.path.join(ENV, 'node', 'node.exe')
-APPIUM_JS = os.path.join(ENV, 'appium', 'build', 'lib', 'main.js')
-APPIUM_HOME = os.path.join(ENV, 'appium-home')
+APPIUM_MAIN_DIR = os.path.join(ENV, 'appium')
+APPIUM_JS = os.path.join(APPIUM_MAIN_DIR, 'build', 'lib', 'main.js')
+# APPIUM_HOME 指向 appium目录下的 .appium（驱动注册目录，和 install 驱动位置一致）
+APPIUM_HOME = os.path.join(APPIUM_MAIN_DIR, '.appium')
 ADB = os.path.join(ENV, 'platform-tools', 'adb.exe')
 PLATFORM_TOOLS = os.path.join(ENV, 'platform-tools')
 
@@ -401,37 +404,91 @@ class GrabbingApp:
         except Exception:
             return False
 
-    def start_server(self):
-        if self.server_running():
-            self.log_line("[服务器] 已在运行")
-            return True
-        # 端口被占但服务器无响应：先清理残留的Appium进程，防止启动失败
+    def _kill_proc_tree(self, pid, including_parent=True):
+        """递归杀死进程树，连带子进程，并等待进程真正退出"""
+        try:
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            # 先杀子进程
+            for child in children:
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            # 再杀父进程
+            if including_parent:
+                parent.kill()
+            # 等待所有进程真正退出（最多5秒）
+            gone, alive = psutil.wait_procs(children + ([parent] if including_parent else []), timeout=5)
+            if alive:
+                # 还有进程没死，强制再杀一次
+                for p in alive:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+                psutil.wait_procs(alive, timeout=2)
+        except psutil.NoSuchProcess:
+            pass
+
+    def stop_server(self):
+        self.log_line("[服务器] 收到停止指令，正在清理Appium及残留进程...")
+
+        # 1. 杀掉我们启动的appium进程树（带等待确认）
         if self.appium_proc and self.appium_proc.poll() is None:
             try:
-                self.appium_proc.terminate()
-                self.log_line("[服务器] 已终止旧的服务器进程")
+                self._kill_proc_tree(self.appium_proc.pid)
+                self.log_line("[服务器] Appium进程树已强制终止")
+            except Exception as e:
+                self.log_line(f"[服务器] 终止进程树异常: {e}")
+        self.appium_proc = None
+
+        # 2. 兜底：只杀本助手env下面残留的node.exe，不会杀全局node
+        for p in psutil.process_iter(["pid", "exe"]):
+            try:
+                exe_path = p.info.get("exe", "")
+                if exe_path and os.path.normpath(NODE) == os.path.normpath(exe_path):
+                    p.kill()
             except Exception:
-                pass
+                continue
+
+        # 2.5 等待端口释放（最多3秒）
+        for _ in range(15):
+            if not self.server_running():
+                break
+            time.sleep(0.2)
+
+        # 3. 停止adb服务，清理uiautomator2手机侧残留
         try:
-            subprocess.run(["taskkill", "/F", "/IM", "node.exe"],
-                           capture_output=True, timeout=10,
+            subprocess.run([ADB, "kill-server"], capture_output=True, timeout=3,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            time.sleep(1)
-            self.log_line("[服务器] 已清理残留的Appium进程")
         except Exception:
             pass
+        time.sleep(0.3)
+        self.log_line("[服务器] ✅ 已清理残留的Appium进程")
+
+    def start_server(self):
+        self.stop_server()
+
         if not os.path.exists(NODE) or not os.path.exists(APPIUM_JS):
             self.log_line("[服务器] ❌ 未找到便携环境(env目录)，请确认与exe在同一文件夹")
             return False
+
         env = os.environ.copy()
         env["APPIUM_HOME"] = APPIUM_HOME
         env["ANDROID_HOME"] = PLATFORM_TOOLS
         env["ANDROID_SDK_ROOT"] = PLATFORM_TOOLS
         env["PATH"] = PLATFORM_TOOLS + ";" + env.get("PATH", "")
-        cmd = [NODE, APPIUM_JS, "--port", str(PORT), "--address", "127.0.0.1"]
-        self.log_line(f"[服务器] 启动中: {cmd[0]}")
+
+        # 删掉 --driver 参数，Appium 自动从 APPIUM_HOME/.appium 读取已安装驱动
+        cmd = [
+            NODE, APPIUM_JS,
+            "--port", str(PORT),
+            "--address", "127.0.0.1"
+        ]
+        self.log_line(f"[服务器] 启动命令: {' '.join(cmd)}")
+        self.log_line(f"[服务器] APPIUM_HOME={APPIUM_HOME}")
         try:
-            # 输出写到日志文件（不能接PIPE不读取，会写满缓冲区导致服务器假死）
             server_log = open(os.path.join(ROOT, "appium_server.log"), "a",
                               encoding="utf-8", errors="replace")
             self.appium_proc = subprocess.Popen(
@@ -446,20 +503,22 @@ class GrabbingApp:
             if self.server_running():
                 self.log_line("[服务器] ✅ 已就绪")
                 return True
-        self.log_line("[服务器] 启动超时，请查看下方日志")
+        self.log_line("[服务器] 启动超时，请查看 appium_server.log")
+        self.stop_server()
         return False
 
     def toggle_server(self):
-        if self.server_running():
+        # 如果有记录的appium_proc且还活着，说明是我们启动的服务器
+        if self.appium_proc and self.appium_proc.poll() is None:
+            # 进程还在 → 点按钮就是"停止"
+            self.stop_server()
+        elif self.server_running():
+            # 进程记录丢了但端口还在响应 → 也执行停止（兜底）
             self.stop_server()
         else:
+            # 确实没在运行 → 启动
             self.start_server()
         self.refresh_status()
-
-    def stop_server(self):
-        if self.appium_proc and self.appium_proc.poll() is None:
-            self.appium_proc.terminate()
-            self.log_line("[服务器] 已停止")
 
     # ---------- 状态 ----------
     def refresh_status(self):
@@ -592,12 +651,13 @@ class GrabbingApp:
         real_stdout = sys.stdout
         sys.stdout = _Tee(real_stdout, self.append_log)
         try:
-            # 服务器未运行时自动启动（在后台线程执行，不卡界面）
-            if not self.server_running():
-                self.append_log("[抢票] Appium服务器未运行，正在自动启动...\n")
-                if not self.start_server():
-                    self.append_log("[抢票] 服务器启动失败，无法开始\n")
-                    return
+            # 每次抢票前强制重启Appium，保证APPIUM_HOME环境变量生效
+            self.append_log("[抢票] 准备启动任务，强制重启Appium服务\n")
+            self.stop_server()
+            if not self.start_server():
+                self.append_log("[抢票] Appium服务器启动失败，无法开始\n")
+                return
+
             import damai_app_v2
             while not self.grab_stop.is_set():
                 self.append_log(f"\n======= {time.strftime('%H:%M:%S')} =======\n")
@@ -654,6 +714,9 @@ class _Tee:
 
     def write(self, s):
         if s.strip():
+            # 确保每条输出都以换行结尾，界面日志逐行显示
+            if not s.endswith("\n"):
+                s = s + "\n"
             self.cb(s)
         try:
             self.real.write(s)
