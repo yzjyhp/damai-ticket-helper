@@ -282,7 +282,7 @@ class GrabbingApp:
         logf.grid(row=4, column=0, sticky="nsew")
         logf.grid_rowconfigure(0, weight=1)
         logf.grid_columnconfigure(0, weight=1)
-        self.log = reg(scrolledtext.ScrolledText(logf, height=14, font=("Microsoft YaHei", 9), state="disabled"), size=9)
+        self.log = reg(scrolledtext.ScrolledText(logf, height=20, font=("Microsoft YaHei", 9), state="disabled"), size=9)
         self.log.grid(row=0, column=0, sticky="nsew")
 
         # 窗口缩放 → 字体随窗口缩放（防抖）
