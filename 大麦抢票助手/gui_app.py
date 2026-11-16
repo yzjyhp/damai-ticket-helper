@@ -27,11 +27,17 @@ DEFAULT_DELAYS = {
 # ---------- 路径：区分打包(exe)运行 与 源码运行 ----------
 def app_dir():
     if getattr(sys, 'frozen', False):
+        # bootstrap 启动器会设置 DMQ_DATA_DIR 指向解压后的数据目录
+        data_dir = os.environ.get('DMQ_DATA_DIR')
+        if data_dir and os.path.isdir(data_dir):
+            return data_dir
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 ROOT = app_dir()
-ENV = os.path.join(ROOT, 'env')
+# env 目录：bootstrap 可能设置 DMQ_ENV_DIR（解压到 LOCALAPPDATA）
+_env_dir_override = os.environ.get('DMQ_ENV_DIR')
+ENV = _env_dir_override if _env_dir_override and os.path.isdir(_env_dir_override) else os.path.join(ROOT, 'env')
 NODE = os.path.join(ENV, 'node', 'node.exe')
 APPIUM_MAIN_DIR = os.path.join(ENV, 'appium')
 APPIUM_JS = os.path.join(APPIUM_MAIN_DIR, 'build', 'lib', 'main.js')
@@ -76,6 +82,9 @@ class GrabbingApp:
         self._build_ui()
         self.root.after(100, self._poll_log_queue)
         self.refresh_status()
+
+        # 窗口关闭时级联清理所有子进程（Appium/Node/adb）
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------- 界面 ----------
     def _build_ui(self):
@@ -349,6 +358,24 @@ class GrabbingApp:
         return "", ""
 
     def load_config(self):
+        # 配置文件不存在时，用默认值初始化各控件，不报错
+        if not os.path.exists(CONFIG_FILE):
+            self.log_line("[配置] 首次运行，使用默认配置（请填好后点「保存配置」）")
+            self.vars["keyword"].set("")
+            self.vars["city"].set("")
+            self.vars["date"].set("")
+            self.vars["session_index"].set("1")
+            self.vars["price"].set("")
+            self.vars["price_index"].set("1")
+            self.vars["users"].set("")
+            self.vars["if_commit_order"].set(True)
+            self.vars["submit_max_retries"].set("10")
+            for key, var in self.delay_vars.items():
+                default_ms = self.delay_defaults_ms.get(key, int(DEFAULT_DELAYS.get(key, 0.5) * 1000))
+                var.set(str(default_ms))
+            self.device_name = ""
+            self.platform_version = ""
+            return
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 c = json.load(f)
@@ -764,6 +791,41 @@ class GrabbingApp:
         self.btn_wait.config(state="normal")
         self.btn_loop.config(state="normal")
         self.append_log("\n[抢票] 任务结束\n")
+
+    def _on_close(self):
+        """窗口关闭：级联停止抢票线程 → 杀 Appium/Node 进程树 → 杀 adb → 退出"""
+        # 1. 停止抢票线程
+        if self.grab_thread and self.grab_thread.is_alive():
+            self.grab_stop.set()
+            self.grab_thread.join(timeout=3)
+
+        # 2. 停止 Appium 服务器（递归杀进程树，连带 node.exe 子进程）
+        try:
+            self.stop_server()
+        except Exception:
+            pass
+
+        # 3. 兜底：杀掉本助手 env 下所有残留的 node.exe
+        try:
+            for p in psutil.process_iter(["pid", "exe"]):
+                try:
+                    exe_path = p.info.get("exe", "")
+                    if exe_path and os.path.normpath(NODE) == os.path.normpath(exe_path):
+                        p.kill()
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # 4. 停止 adb server
+        try:
+            subprocess.run([ADB, "kill-server"], capture_output=True, timeout=3,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception:
+            pass
+
+        # 5. 销毁窗口退出
+        self.root.destroy()
 
 
 class _Tee:
