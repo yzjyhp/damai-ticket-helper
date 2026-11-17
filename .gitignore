@@ -203,3 +203,6 @@ appium_server.log
 # 机器特定的启动脚本（写死了本机路径，换电脑需自行调整）
 *.bat
 .workbuddy
+exe-packer/build
+exe-packer/dist
+

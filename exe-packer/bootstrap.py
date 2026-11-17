@@ -1,24 +1,22 @@
 # -*- coding: UTF-8 -*-
 """
 大麦抢票助手 - 启动引导器
-职责：检查 env 是否已解压到本地，没有则从 exe 内嵌的 env_bundle.zip 解压，
-然后启动 GUI（gui_app.py 的 main）。
+职责：逐步校验/解压运行环境，显示带编号的进度窗口，然后启动 GUI。
 
-首次运行解压 env 时会显示进度窗口，避免用户以为程序卡死。
-纯离线：不下载任何东西，环境只从 exe 内嵌的 zip 解压。
+纯离线：不下载任何东西，环境只从 exe 内嵌的 env_bundle.zip 解压。
 """
 import os
 import sys
 import zipfile
 import shutil
 import time
-import threading
+import subprocess
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 
+# ---------- 路径 ----------
 def get_env_dir():
-    """env 目标路径：exe 所在目录下的 env"""
     if getattr(sys, 'frozen', False):
         return os.path.join(os.path.dirname(sys.executable), 'env')
     else:
@@ -26,26 +24,13 @@ def get_env_dir():
 
 
 def get_data_dir():
-    """数据目录：exe 所在目录"""
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     else:
         return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'exe-packer')
 
 
-def env_is_complete(env_dir):
-    """检查 env 目录是否完整"""
-    checks = [
-        os.path.join(env_dir, 'node', 'node.exe'),
-        os.path.join(env_dir, 'appium', 'build', 'lib', 'main.js'),
-        os.path.join(env_dir, 'appium', '.appium', 'node_modules', 'appium-uiautomator2-driver'),
-        os.path.join(env_dir, 'platform-tools', 'adb.exe'),
-    ]
-    return all(os.path.exists(p) for p in checks)
-
-
 def find_bundled_zip():
-    """查找 exe 内嵌的 env_bundle.zip"""
     meipass = getattr(sys, '_MEIPASS', None)
     if meipass:
         candidate = os.path.join(meipass, 'env_bundle.zip')
@@ -54,56 +39,221 @@ def find_bundled_zip():
     return None
 
 
-class SplashWindow:
-    """启动进度窗口：首次解压 env 时显示进度，避免用户以为程序卡死"""
+# ---------- 校验函数 ----------
+def _check_node(env_dir):
+    node_exe = os.path.join(env_dir, 'node', 'node.exe')
+    if not os.path.isfile(node_exe):
+        return False, "node.exe 不存在"
+    try:
+        r = subprocess.run([node_exe, '--version'], capture_output=True, text=True, timeout=10,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode != 0:
+            return False, "执行失败"
+        return True, r.stdout.strip()
+    except Exception as e:
+        return False, f"执行异常 ({e})"
 
-    def __init__(self):
+
+def _check_appium(env_dir):
+    appium_js = os.path.join(env_dir, 'appium', 'build', 'lib', 'main.js')
+    if not os.path.isfile(appium_js):
+        return False, "main.js 不存在"
+    return True, "OK"
+
+
+def _check_uiautomator2(env_dir):
+    driver_path = os.path.join(env_dir, 'appium', '.appium', 'node_modules', 'appium-uiautomator2-driver')
+    if not os.path.isdir(driver_path):
+        return False, "驱动目录不存在"
+    pkg_json = os.path.join(driver_path, 'package.json')
+    if not os.path.isfile(pkg_json):
+        return False, "package.json 不存在"
+    return True, "OK"
+
+
+def _check_adb(env_dir):
+    adb_exe = os.path.join(env_dir, 'platform-tools', 'adb.exe')
+    if not os.path.isfile(adb_exe):
+        return False, "adb.exe 不存在"
+    try:
+        r = subprocess.run([adb_exe, 'version'], capture_output=True, text=True, timeout=10,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode != 0:
+            return False, "执行失败"
+        return True, "OK"
+    except Exception as e:
+        return False, f"执行异常 ({e})"
+
+
+# ---------- 模块解压 ----------
+# env_bundle.zip 内每个模块对应的顶层目录名
+MODULE_ZIP_NAMES = {
+    'node': 'node',
+    'appium': 'appium',
+    'platform-tools': 'platform-tools',
+}
+
+
+def _extract_module(zip_path, env_dir, module_name, splash):
+    """从 env_bundle.zip 中只解压指定模块的文件，显示子进度"""
+    module_prefix = MODULE_ZIP_NAMES.get(module_name, module_name) + '/'
+
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        # 筛选属于该模块的文件
+        member_names = [n for n in zf.namelist() if n.startswith(module_prefix)]
+        total = len(member_names)
+        if total == 0:
+            return False
+
+        # 先删除旧的模块目录
+        module_dir = os.path.join(env_dir, module_name)
+        if os.path.exists(module_dir):
+            shutil.rmtree(module_dir, ignore_errors=True)
+
+        for i, name in enumerate(member_names, 1):
+            zf.extract(name, env_dir)
+            if i % 200 == 0 or i == total:
+                splash.update_sub_progress(i, total)
+
+
+# ---------- 路径修复 ----------
+def _fix_extensions_paths(env_dir):
+    yaml_paths = [
+        os.path.join(env_dir, 'appium', '.appium', 'node_modules', '.cache', 'appium', 'extensions.yaml'),
+        os.path.join(env_dir, 'appium', 'node_modules', '.cache', 'appium', 'extensions.yaml'),
+    ]
+    correct_appium_home = os.path.join(env_dir, 'appium', '.appium').replace('/', '\\')
+    for yaml_path in yaml_paths:
+        if not os.path.isfile(yaml_path):
+            continue
+        try:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            changed = False
+            for i, line in enumerate(lines):
+                if 'installPath' in line and '.appium' in line:
+                    idx = line.find('.appium')
+                    after_appium = line[idx + len('.appium'):]
+                    lines[i] = f'    installPath: {correct_appium_home}{after_appium}'
+                    changed = True
+            if changed:
+                with open(yaml_path, 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+        except Exception:
+            pass
+
+
+# ---------- 进度窗口 ----------
+class SplashWindow:
+    """带步骤列表 + 双进度条的启动窗口"""
+
+    # 检查项定义：(编号, 名称, 检查函数, 模块名(用于解压))
+    STEPS = [
+        (1, "Node.js 运行环境", _check_node, 'node'),
+        (2, "Appium 自动化服务", _check_appium, 'appium'),
+        (3, "uiautomator2 驱动", _check_uiautomator2, 'appium'),  # 和 appium 同包
+        (4, "Android Debug Bridge (adb)", _check_adb, 'platform-tools'),
+    ]
+
+    def __init__(self, subtitle=""):
         self.root = tk.Tk()
         self.root.title("大麦抢票助手")
-        self.root.geometry("420x200")
-        # 居中显示
+        self.root.geometry("480x360")
         self.root.eval('tk::PlaceWindow . center')
-        # 禁止关闭（解压过程中不能中断）
         self.root.protocol("WM_DELETE_WINDOW", lambda: None)
         self.root.resizable(False, False)
 
-        # 标题
-        tk.Label(self.root, text="大麦抢票助手", font=("Microsoft YaHei", 16, "bold")).pack(pady=(20, 5))
-        # 提示文字
-        self.status_var = tk.StringVar(value="正在准备运行环境...")
-        tk.Label(self.root, textvariable=self.status_var, font=("Microsoft YaHei", 10)).pack(pady=(0, 10))
-        # 进度条
-        self.progress = ttk.Progressbar(self.root, length=360, mode='determinate')
-        self.progress.pack(pady=5)
-        # 百分比文字
-        self.percent_var = tk.StringVar(value="0%")
-        tk.Label(self.root, textvariable=self.percent_var, font=("Microsoft YaHei", 9)).pack(pady=(0, 10))
-        # 底部提示
-        tk.Label(self.root, text="首次启动需要解压运行环境，请耐心等待约30秒",
-                 font=("Microsoft YaHei", 8), fg="#888").pack(pady=(0, 5))
+        tk.Label(self.root, text="大麦抢票助手", font=("Microsoft YaHei", 16, "bold")).pack(pady=(15, 3))
+        if subtitle:
+            tk.Label(self.root, text=subtitle, font=("Microsoft YaHei", 8), fg="#888").pack(pady=(0, 5))
+
+        # 步骤列表区
+        steps_frame = ttk.Frame(self.root)
+        steps_frame.pack(fill="x", padx=20, pady=5)
+        self.step_labels = {}
+        for num, name, _, _ in self.STEPS:
+            row = ttk.Frame(steps_frame)
+            row.pack(fill="x", pady=2)
+            lbl = tk.Label(row, text=f"  {num}. {name}", font=("Microsoft YaHei", 10), fg="#666")
+            lbl.pack(side="left")
+            mark = tk.Label(row, text="", font=("Microsoft YaHei", 10))
+            mark.pack(side="right")
+            self.step_labels[num] = (lbl, mark)
+
+        # 主进度条
+        ttk.Label(self.root, text="", ).pack(pady=(5, 0))
+        self.status_var = tk.StringVar(value="")
+        tk.Label(self.root, textvariable=self.status_var, font=("Microsoft YaHei", 9)).pack(pady=(2, 2))
+        self.progress = ttk.Progressbar(self.root, length=420, mode='determinate')
+        self.progress.pack(pady=2)
+
+        # 子进度条（模块解压时用）
+        self.sub_status_var = tk.StringVar(value="")
+        self.sub_status_lbl = tk.Label(self.root, textvariable=self.sub_status_var, font=("Microsoft YaHei", 8), fg="#888")
+        self.sub_status_lbl.pack(pady=(2, 0))
+        self.sub_progress = ttk.Progressbar(self.root, length=420, mode='determinate')
+        self.sub_progress.pack(pady=2)
 
         self._alive = True
         self.root.update()
 
-    def update_progress(self, current, total):
-        """更新进度条（在主线程调用）"""
+    def set_step_status(self, step_num, status, ok=None):
+        """更新某步骤的状态标记: status='checking'/'ok'/'fail'/'extracting'"""
+        if not self._alive or step_num not in self.step_labels:
+            return
+        lbl, mark = self.step_labels[step_num]
+        if status == 'checking':
+            lbl.config(fg="#1565C0")  # 蓝色=正在检查
+            mark.config(text="...", fg="#1565C0")
+        elif status == 'ok':
+            lbl.config(fg="#2E7D32")  # 绿色=通过
+            mark.config(text="OK", fg="#2E7D32")
+        elif status == 'fail':
+            lbl.config(fg="#C62828")  # 红色=失败
+            mark.config(text="FAIL", fg="#C62828")
+        elif status == 'extracting':
+            lbl.config(fg="#E65100")  # 橙色=正在解压
+            mark.config(text="解压中...", fg="#E65100")
+        elif status == 'extracted':
+            lbl.config(fg="#2E7D32")
+            mark.config(text="已修复", fg="#2E7D32")
+        self.root.update_idletasks()
+
+    def update_progress(self, current, total, status=None):
         if not self._alive:
             return
         percent = int(current * 100 / total) if total > 0 else 0
         self.progress['value'] = percent
-        self.percent_var.set(f"{percent}%")
-        self.status_var.set(f"正在解压运行环境... ({current}/{total})")
+        if status:
+            self.status_var.set(status)
+        self.root.update_idletasks()
+
+    def update_sub_progress(self, current, total, status=None):
+        """更新子进度条（模块解压进度）"""
+        if not self._alive:
+            return
+        percent = int(current * 100 / total) if total > 0 else 0
+        self.sub_progress['value'] = percent
+        if status:
+            self.sub_status_var.set(status)
+        else:
+            self.sub_status_var.set(f"解压中... {current}/{total}")
+        self.root.update_idletasks()
+
+    def hide_sub_progress(self):
+        if not self._alive:
+            return
+        self.sub_progress['value'] = 0
+        self.sub_status_var.set("")
         self.root.update_idletasks()
 
     def set_status(self, text):
-        """更新状态文字"""
         if not self._alive:
             return
         self.status_var.set(text)
         self.root.update_idletasks()
 
     def close(self):
-        """关闭进度窗口"""
         if not self._alive:
             return
         self._alive = False
@@ -113,101 +263,97 @@ class SplashWindow:
             pass
 
 
-def extract_env_with_splash(zip_path, env_dir):
-    """带进度窗口解压 env_bundle.zip"""
-    splash = SplashWindow()
+# ---------- 主流程 ----------
+def ensure_env():
+    """逐步校验 + 按需解压，带编号进度窗口"""
+    env_dir = get_env_dir()
+    zip_path = find_bundled_zip()
+    os.makedirs(env_dir, exist_ok=True)
+
+    splash = SplashWindow("正在检查运行环境，请稍候...")
+
+    all_ok = True
+    failures = []
+    total_steps = len(SplashWindow.STEPS)
 
     try:
-        os.makedirs(os.path.dirname(env_dir), exist_ok=True)
+        for idx, (num, name, check_fn, module_name) in enumerate(SplashWindow.STEPS):
+            # 1. 标记为正在检查
+            splash.update_progress(idx, total_steps, f"步骤 {num}/{total_steps}: 正在校验 {name}...")
+            splash.set_step_status(num, 'checking')
+            time.sleep(0.3)
 
-        # 先清理残留
-        if os.path.exists(env_dir):
-            splash.set_status("清理旧环境...")
-            shutil.rmtree(env_dir, ignore_errors=True)
+            # 2. 执行检查
+            ok, msg = check_fn(env_dir)
 
-        # 解压
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            names = zf.namelist()
-            total = len(names)
-            for i, name in enumerate(names, 1):
-                zf.extract(name, env_dir)
-                if i % 500 == 0 or i == total:
-                    splash.update_progress(i, total)
+            if ok:
+                # 校验通过
+                splash.set_step_status(num, 'ok')
+                splash.update_progress(idx + 1, total_steps, f"步骤 {num}/{total_steps}: {name} - OK")
+                time.sleep(0.2)
+            else:
+                # 校验失败 → 尝试解压该模块
+                splash.set_step_status(num, 'extracting')
+                splash.update_progress(idx, total_steps, f"步骤 {num}/{total_steps}: {name} 缺失，正在解压...")
 
-        splash.set_status("修复环境配置...")
-        _fix_extensions_paths(env_dir)
+                if zip_path:
+                    # 解压该模块（显示子进度）
+                    _extract_module(zip_path, env_dir, module_name, splash)
 
-        splash.set_status("环境准备完成！")
-        time.sleep(0.5)
+                    # 如果是 appium 模块，修复路径
+                    if module_name == 'appium':
+                        splash.sub_status_var.set("修复驱动路径...")
+                        _fix_extensions_paths(env_dir)
+                        time.sleep(0.2)
+
+                    splash.hide_sub_progress()
+
+                    # 重新校验
+                    splash.set_step_status(num, 'checking')
+                    splash.update_progress(idx, total_steps, f"步骤 {num}/{total_steps}: 重新校验 {name}...")
+                    time.sleep(0.3)
+                    ok2, msg2 = check_fn(env_dir)
+
+                    if ok2:
+                        splash.set_step_status(num, 'extracted')
+                        splash.update_progress(idx + 1, total_steps, f"步骤 {num}/{total_steps}: {name} - 已修复")
+                        time.sleep(0.2)
+                    else:
+                        splash.set_step_status(num, 'fail')
+                        splash.update_progress(idx + 1, total_steps, f"步骤 {num}/{total_steps}: {name} - FAIL")
+                        failures.append(f"{num}. {name}: {msg2}")
+                        all_ok = False
+                        time.sleep(0.3)
+                else:
+                    splash.set_step_status(num, 'fail')
+                    splash.update_progress(idx + 1, total_steps, f"步骤 {num}/{total_steps}: {name} - 无法修复")
+                    failures.append(f"{num}. {name}: {msg}（无内置环境包）")
+                    all_ok = False
+                    time.sleep(0.3)
+
+        # 汇总
+        if all_ok:
+            splash.update_progress(total_steps, total_steps, "所有环境校验通过！正在启动...")
+            time.sleep(0.8)
+        else:
+            splash.update_progress(total_steps, total_steps, f"校验完成: {len(failures)} 项失败")
+            time.sleep(1)
     finally:
         splash.close()
 
-
-def _fix_extensions_paths(env_dir):
-    """修正 Appium extensions.yaml 中硬编码的旧路径为当前实际路径"""
-    # extensions.yaml 可能存在的位置
-    yaml_paths = [
-        os.path.join(env_dir, 'appium', '.appium', 'node_modules', '.cache', 'appium', 'extensions.yaml'),
-        os.path.join(env_dir, 'appium', 'node_modules', '.cache', 'appium', 'extensions.yaml'),
-    ]
-
-    for yaml_path in yaml_paths:
-        if not os.path.isfile(yaml_path):
-            continue
-        try:
-            with open(yaml_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-
-            # 当前正确的 .appium 路径（统一用反斜杠，和 yaml 里一致）
-            correct_appium_home = os.path.join(env_dir, 'appium', '.appium').replace('/', '\\')
-
-            changed = False
-            for i, line in enumerate(lines):
-                if 'installPath' in line and '.appium' in line:
-                    # 保留 .appium 之后的部分（\node_modules\...），替换之前的路径
-                    idx = line.find('.appium')
-                    after_appium = line[idx + len('.appium'):]
-                    lines[i] = f'    installPath: {correct_appium_home}{after_appium}'
-                    changed = True
-
-            if changed:
-                with open(yaml_path, 'w', encoding='utf-8') as f:
-                    f.writelines(lines)
-
-        except Exception:
-            pass
-
-
-def ensure_env():
-    """确保 env 已解压到本地，首次解压时显示进度窗口"""
-    env_dir = get_env_dir()
-
-    # 已完整 → 修正路径后直接用（env 可能是从别处复制来的，路径不一致）
-    if env_is_complete(env_dir):
-        _fix_extensions_paths(env_dir)
-        return env_dir
-
-    # 不完整 → 从 exe 内嵌 zip 解压（带进度窗口）
-    zip_path = find_bundled_zip()
-    if zip_path:
-        extract_env_with_splash(zip_path, env_dir)
-        if env_is_complete(env_dir):
-            return env_dir
-        # 解压后仍不完整
-        tk.messagebox.showerror("大麦抢票助手", "环境解压后仍不完整，请重新下载 exe") if hasattr(tk, 'messagebox') else None
-    else:
-        # 没有内嵌 zip，弹窗提示
+    if not all_ok:
         root = tk.Tk()
         root.withdraw()
-        from tkinter import messagebox
-        messagebox.showerror("大麦抢票助手", "未找到内置环境包 env_bundle.zip\n请重新下载完整的 exe")
+        messagebox.showerror("大麦抢票助手",
+                             "环境校验未通过：\n\n" + "\n".join(failures) +
+                             "\n\n请重新下载完整的 exe")
         root.destroy()
 
     return env_dir
 
 
 def main():
-    # 1. 确保 env 就绪（首次解压会显示进度窗口）
+    # 1. 逐步校验 + 按需解压
     env_dir = ensure_env()
 
     # 2. 设置路径
