@@ -18,7 +18,7 @@ packer_dir = SPECPATH
 # 项目根目录
 project_root = os.path.normpath(os.path.join(packer_dir, '..'))
 # 大麦抢票助手 目录（gui_app.py 等源码在这里）
-gui_dir = os.path.join(project_root, '大麦抢票助手')
+gui_dir = os.path.join(project_root, 'gui')
 # damai_appium 目录（核心抢票逻辑）
 damai_appium_dir = os.path.join(project_root, 'damai_appium')
 # env 压缩包

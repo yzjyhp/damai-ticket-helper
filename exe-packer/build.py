@@ -22,7 +22,7 @@ import subprocess
 # ---------- 路径 ----------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-GUI_DIR = os.path.join(PROJECT_ROOT, '大麦抢票助手')
+GUI_DIR = os.path.join(PROJECT_ROOT, 'gui')
 DAMAI_APPIUM_DIR = os.path.join(PROJECT_ROOT, 'damai_appium')
 DIST_DIR = os.path.join(SCRIPT_DIR, 'dist')
 SPEC_FILE = os.path.join(SCRIPT_DIR, 'build.spec')
