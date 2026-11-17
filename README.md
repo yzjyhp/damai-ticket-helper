@@ -12,13 +12,12 @@
 
 | 文件 | 说明 |
 |------|------|
-| `damai-ticket-helper-portable-v1.0.0.zip` | 📦 **便携版**（152MB）：含完整环境（Node+Appium+adb），解压即用，无需安装任何软件 |
-| `damai-ticket-helper-source-v1.0.0.zip` | 💻 **源码版**（22KB）：仅核心源码，开发者自行搭环境 |
+| `抢票助手.exe` | 📦 **完整版单文件**（约 117MB）：内含 Python 运行时 + GUI + 抢票逻辑 + Node.js + Appium + adb 全部环境，双击即用 |
+| `damai-ticket-helper-source.zip` | 💻 **源码版**：仅核心源码，开发者自行搭环境 |
 
-**便携版步骤**：解压 → 手机开USB调试连电脑 → 双击 `抢票助手.exe` → 点红色「一键检测环境」→ 填配置 → 点绿色「开售秒抢」。
+**完整版步骤**：下载 `抢票助手.exe` → 手机开 USB 调试连电脑 → 双击 exe（首次自动解压环境约 30 秒）→ 点红色「一键检测环境」→ 填配置 → 点绿色「开售秒抢」。
 
-> ⚠️ 解压时必须**完整解压整个文件夹**（env 目录是运行环境），不要只拿 exe。
-> 文件名用英文是为了兼容各平台下载工具。
+> 单文件 exe 内含一切，无需额外下载或安装任何软件。首次运行自动解压运行环境到 exe 同级目录，之后秒开。
 
 ---
 
@@ -29,12 +28,15 @@
 在原项目（Selenium + Appium 双端抢票）的基础上，新增了：
 
 - ✅ 可视化图形界面（tkinter），一键操作
-- ✅ 便携打包（PyInstaller 打包成 exe，环境内置，解压即用）
+- ✅ 单文件打包（PyInstaller onefile，环境内嵌，双击即用）
 - ✅ 适配新版大麦 APP（9.x）的界面结构
 - ✅ 开售秒抢模式（等待开售/有票，检测到变化瞬间自动抢）
 - ✅ 缺货自动刷新（切换场次刷新等待补货）
 - ✅ 多观演人自动购票（人数 = 张数，上限 6 张）
 - ✅ 间隔自定义（毫秒级调节各步骤速度）
+- ✅ 提交订单循环重试（次数可配置，0 = 无限重试）
+- ✅ 进程级联清理（关闭 exe 时自动清理 Appium/Node/adb）
+- ✅ 环境自动修复（路径自动适配，换目录不出错）
 
 ---
 
@@ -46,6 +48,9 @@
 - **缺货刷新**：缺货时自动切换场次刷新，等到有票
 - **多观演人**：自动按观演人数设置购票张数
 - **循环抢票**：已开售且票抢手时反复重试
+- **提交重试**：提交订单失败时自动循环重试，次数可配置
+- **环境自修复**：换目录/换电脑自动修正 Appium 驱动路径
+- **进程管理**：关闭程序时级联清理所有子进程（Appium/Node/adb）
 
 ---
 
@@ -55,7 +60,8 @@
 damai-ticket-helper/
 ├── damai/                     # Web 端抢票（继承原项目）
 │   ├── damai.py
-│   └── config.json
+│   ├── config.py              # 配置类
+│   └── concert.py             # 抢票逻辑
 ├── damai_appium/              # 移动端抢票（核心）
 │   ├── damai_app_v2.py        # 主程序
 │   ├── damai_app.py           # 原版主程序
@@ -65,23 +71,43 @@ damai-ticket-helper/
 │   ├── gui_app.py             # GUI 源码
 │   ├── 使用说明.txt
 │   └── config.example.jsonc   # 配置示例
+├── exe-packer/                # exe 打包工具
+│   ├── 一键打包.bat           # 双击即可打包
+│   ├── build.py               # 打包脚本
+│   ├── build.spec             # PyInstaller 配置
+│   ├── bootstrap.py           # exe 启动引导器（首次解压 env，带进度窗口）
+│   ├── install_env.py         # 环境检测脚本（纯离线）
+│   ├── env_bundle.zip         # env 环境压缩包（97MB）
+│   └── README.md              # 打包说明
 ├── tests/                     # 测试
 ├── doc/                       # 文档
 └── README.md
 ```
 
-> 注：`env/`（便携环境）、`抢票助手.exe`（打包产物）等二进制/大文件不提交仓库，用户本地自行准备。
+> 注：`env/`（运行环境）、`抢票助手.exe`（打包产物）等二进制/大文件不提交仓库，用户本地自行准备或通过 exe-packer 打包。
 
 ---
 
 ## 快速开始
 
-### 方式一：源码运行
+### 方式一：完整版 exe（推荐，零配置）
+
+1. 下载 `抢票助手.exe`（约 117MB）
+2. 放到任意目录，双击运行
+   - 首次运行：自动解压运行环境（约 30 秒，有进度窗口提示）
+   - 后续运行：直接秒开
+3. 手机 USB 连接电脑，开启「USB 调试」
+4. 点红色「一键检测环境」→ 全绿
+5. 填好演出配置 → 保存
+6. 手机进大麦，停在目标演出页面
+7. 点绿色「开售秒抢」挂机等待
+
+### 方式二：源码运行
 
 #### 1. 安装环境
 
 ```bash
-# Python 3.9+
+# Python 3.9+（需带 tkinter）
 # Node.js 20.19.0+
 # Appium 3.1.0+
 npm install -g appium
@@ -93,7 +119,7 @@ appium driver install uiautomator2
 #### 2. 安装 Python 依赖
 
 ```bash
-pip install selenium Appium-Python-Client
+pip install psutil selenium Appium-Python-Client
 ```
 
 #### 3. 配置
@@ -110,37 +136,59 @@ cp config.example.jsonc config.jsonc
 # 启动 Appium 服务器
 appium --port 4999
 
-# 运行抢票（需手机连接 + USB调试 + 安装大麦APP）
+# 方式 A：GUI 界面运行
+cd 大麦抢票助手
+python gui_app.py
+
+# 方式 B：命令行直接运行（需手机连接 + USB调试 + 安装大麦APP）
+cd damai_appium
 python damai_app_v2.py --wait-sale
 ```
 
-### 方式二：图形界面（推荐）
+### 方式三：自行打包 exe
 
-1. 手机 USB 连接电脑，开启「开发者选项」→「USB 调试」
-2. 运行 `gui_app.py`（或使用打包好的 exe）
-3. 点红色「一键检测环境」→ 全绿
-4. 填好演出配置 → 保存
-5. 手机进大麦，停在目标演出页面
-6. 点绿色「开售秒抢」挂机等待
+```bash
+cd exe-packer
+# 1. 安装 pip 依赖
+pip install pyinstaller psutil Appium-Python-Client selenium
+# 2. 放好 env_bundle.zip（含 Node.js + Appium + adb 的压缩包）
+# 3. 双击「一键打包.bat」
+```
+
+详见 [exe-packer/README.md](exe-packer/README.md)。
 
 ---
 
 ## 配置说明
 
-| 字段 | 说明 |
-|------|------|
-| server_url | Appium 服务器地址 |
-| keyword | 演出搜索关键词 |
-| users | 观演人名单（几个买几张） |
-| city | 演出城市 |
-| date | 演出日期 |
-| session_index | 场次位置（第几个场次卡片，从 0 计数） |
-| price | 票价 |
-| price_index | 票价位置（第几个票价卡片，从 0 计数） |
-| if_commit_order | 是否自动提交订单 |
-| delays | 各步骤间隔（秒） |
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| server_url | Appium 服务器地址 | `http://127.0.0.1:4999` |
+| keyword | 演出搜索关键词 | — |
+| users | 观演人名单（几个买几张，上限 6） | — |
+| city | 演出城市 | — |
+| date | 演出日期（如 9.25） | — |
+| session_index | 场次位置（第几个场次卡片，从 0 计数） | — |
+| price | 票价（如 380） | — |
+| price_index | 票价位置（第几个票价卡片，从 0 计数） | — |
+| if_commit_order | 是否自动提交订单 | `true` |
+| submit_max_retries | 提交订单最大重试次数（0 = 无限重试） | `10` |
+| delays | 各步骤间隔（秒） | 见下表 |
+
+### 间隔设置
+
+| 字段 | 说明 | 默认值（秒） |
+|------|------|-------------|
+| poll | 开售检测轮询间隔 | 0.2 |
+| refresh | 页面强制刷新间隔 | 2.0 |
+| step | 步骤间间隔（选场次/票价/观演人） | 0.5 |
+| click | 连续点击间隔（数量加号等） | 0.15 |
+| scroll | 滚动后等待 | 0.6 |
+| page_load | 页面加载等待 | 2.5 |
 
 > **场次/票价位置说明**：大麦新版把日期和票价文字画成了图片，程序读不到，只能按位置点。`session_index` / `price_index` 是「第几个卡片，从 0 开始」。GUI 界面里填的是「第几个，从 1 开始」，会自动转换。
+
+> **提交重试说明**：`submit_max_retries` 控制提交订单的循环次数。填 `0` 表示无限重试直到成功；填 `10` 表示最多尝试 10 次。抢票紧张时建议设 `0`。
 
 ---
 
@@ -161,10 +209,42 @@ python damai_app_v2.py --wait-sale
 
 ---
 
+## exe 运行机制
+
+### 首次运行
+
+双击 `抢票助手.exe` → 显示进度窗口（标题 + 进度条 + 百分比）→ 自动解压运行环境到 exe 同级目录 `env/`（约 30 秒）→ 自动修正 Appium 驱动路径 → 启动 GUI 主界面。
+
+### 后续运行
+
+env 已存在 → 直接启动 GUI，秒开。
+
+### 环境损坏/换目录
+
+点「一键检测环境」→ 从 exe 内嵌的 `env_bundle.zip` 重新解压恢复 → 自动修正路径。纯离线，不联网。
+
+### 关闭程序
+
+关闭 exe 时自动级联清理所有子进程：
+1. 停止抢票线程
+2. 杀 Appium 进程树（递归杀子进程）
+3. 杀残留的 node.exe
+4. 停止 adb server
+
+---
+
 ## 环境要求
 
-- **Python**：3.9+
-- **Node.js**：20.19.0+（移动端）
+### 完整版 exe（推荐）
+
+- **操作系统**：Windows 10/11
+- **手机**：Android 真机，USB 调试，安装大麦 APP 并登录
+- 其他一切（Python/Node.js/Appium/adb）都内嵌在 exe 里
+
+### 源码运行
+
+- **Python**：3.9+（需带 tkinter）
+- **Node.js**：20.19.0+
 - **Appium**：3.1.0+ + uiautomator2 驱动
 - **Android**：真机或模拟器，安装大麦 APP 并登录
 - **操作系统**：Windows / macOS / Linux
@@ -173,26 +253,66 @@ python damai_app_v2.py --wait-sale
 
 ## 常见问题
 
-### 端口 4723 无法绑定
+### 端口 4999 被占用
 
-Windows 系统保留端口范围 4658–4757 会占用 4723，本项目已改用 **4999** 端口。
+程序自动在启动前清理残留进程，如果仍被占用：
+
+```bash
+taskkill /F /IM node.exe
+# 重新运行程序
+```
 
 ### 服务器「占着端口但无响应」
 
-残留的 node 进程占用了端口，清理后重启：
+残留的 node 进程占用了端口，GUI 会自动用 psutil 递归杀进程树。如仍不行：
 
 ```bash
-# 清理残留进程
 taskkill /F /IM node.exe
-# 重新启动 Appium
-appium --port 4999
+taskkill /F /IM adb.exe
+# 重新运行程序
 ```
 
 ### 手机识别不到
 
 1. 检查 USB 调试是否开启、USB 模式是否「文件传输」
 2. 重新插拔 USB 线，手机弹授权窗口点「始终允许」
-3. `adb kill-server && adb start-server` 重启 adb
+3. 换数据线/USB 口（有些线只能充电不能传数据）
+4. 安装手机品牌的 USB 驱动
+5. `adb kill-server && adb start-server` 重启 adb
+
+### 首次启动慢
+
+首次运行需要解压运行环境（约 97MB 压缩包 → 271MB），约 30 秒。会显示进度窗口，不是卡死。之后启动秒开。
+
+### Appium 驱动找不到
+
+如果换目录后报 `Could not find a driver for automationName 'UiAutomator2'`，程序会自动修正 `extensions.yaml` 中的路径。如仍不行，删除 exe 同级的 `env/` 目录，重新双击 exe 会自动重新解压。
+
+---
+
+## 打包说明
+
+使用 `exe-packer/` 目录下的工具自行打包：
+
+```
+exe-packer/
+├── 一键打包.bat        ← 双击即可打包
+├── build.py            ← 打包脚本（检查依赖 → 检查源码 → 检查 zip → PyInstaller）
+├── build.spec          ← PyInstaller 配置（onefile 模式）
+├── bootstrap.py        ← exe 启动引导器（首次解压 env，带进度窗口，自动修正路径）
+├── install_env.py      ← 环境检测脚本（纯离线）
+├── env_bundle.zip      ← env 环境压缩包（97MB）
+└── README.md           ← 详细说明
+```
+
+打包流程：
+1. bat 自动查找带 tkinter 的 Python
+2. 检查 pip 依赖（pyinstaller / psutil / Appium-Python-Client / selenium）
+3. 清理上次构建产物
+4. PyInstaller onefile 打包（env_bundle.zip 内嵌进 exe）
+5. 输出 `dist/抢票助手.exe`（约 117MB）
+
+纯离线打包：不下载依赖、不下载 env、不压缩 env。
 
 ---
 
