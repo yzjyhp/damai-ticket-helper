@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext, messagebox, simpledialog
 import psutil
 
 APP_TITLE = "大麦抢票助手"
@@ -209,10 +209,10 @@ class GrabbingApp:
         self.config_combo = reg(ttk.Combobox(cfg_bar, textvariable=self.config_var, width=18, state="readonly"), size=9)
         self.config_combo.pack(side="left", padx=2)
         self.config_combo.bind("<<ComboboxSelected>>", self._on_config_selected)
-        reg(ttk.Button(cfg_bar, text="加载", command=self.load_config), size=9).pack(side="left", padx=2)
-        reg(ttk.Button(btns := ttk.Frame(cfg_bar), text="保存", command=self.save_config), size=9).pack(side="left", padx=2)
-        reg(ttk.Button(btns, text="另存为", command=self.save_config_as), size=9).pack(side="left", padx=2)
-        reg(ttk.Button(btns, text="删除", command=self.delete_config), size=9).pack(side="left", padx=2)
+        reg(ttk.Button(cfg_bar, text="新建", command=self.new_config), size=9).pack(side="left", padx=2)
+        reg(ttk.Button(cfg_bar, text="保存", command=self.save_config), size=9).pack(side="left", padx=2)
+        reg(ttk.Button(cfg_bar, text="另存为", command=self.save_config_as), size=9).pack(side="left", padx=2)
+        reg(ttk.Button(cfg_bar, text="删除", command=self.delete_config), size=9).pack(side="left", padx=2)
 
         grid = ttk.Frame(cfg)
         grid.pack(anchor="w")   # 左对齐、自然宽度，标签不被挤
@@ -370,27 +370,48 @@ class GrabbingApp:
             pass
         return "", ""
 
+    def _get_config_file(self):
+        """获取当前配置文件路径"""
+        if self.current_config_name:
+            os.makedirs(CONFIGS_DIR, exist_ok=True)
+            return os.path.join(CONFIGS_DIR, f"{self.current_config_name}.jsonc")
+        return CONFIG_FILE
+
+    def _refresh_config_list(self):
+        """刷新配置下拉框列表"""
+        names = []
+        # 默认配置
+        if os.path.exists(CONFIG_FILE):
+            names.append("默认配置")
+        # configs/ 目录下的配置
+        if os.path.isdir(CONFIGS_DIR):
+            for f in sorted(os.listdir(CONFIGS_DIR)):
+                if f.endswith('.jsonc') or f.endswith('.json'):
+                    names.append(f.rsplit('.', 1)[0])
+        self.config_combo['values'] = names
+        # 设置当前选中项
+        current = "默认配置" if not self.current_config_name else self.current_config_name
+        if current in names:
+            self.config_var.set(current)
+        elif names:
+            self.config_var.set(names[0])
+            self.current_config_name = "" if names[0] == "默认配置" else names[0]
+
+    def _on_config_selected(self, event=None):
+        """下拉框选择配置时切换"""
+        name = self.config_var.get()
+        self.current_config_name = "" if name == "默认配置" else name
+        self.load_config()
+
     def load_config(self):
-        # 配置文件不存在时，用默认值初始化各控件，不报错
-        if not os.path.exists(CONFIG_FILE):
-            self.log_line("[配置] 首次运行，使用默认配置（请填好后点「保存配置」）")
-            self.vars["keyword"].set("")
-            self.vars["city"].set("")
-            self.vars["date"].set("")
-            self.vars["session_index"].set("1")
-            self.vars["price"].set("")
-            self.vars["price_index"].set("1")
-            self.vars["users"].set("")
-            self.vars["if_commit_order"].set(True)
-            self.vars["submit_max_retries"].set("10")
-            for key, var in self.delay_vars.items():
-                default_ms = self.delay_defaults_ms.get(key, int(DEFAULT_DELAYS.get(key, 0.5) * 1000))
-                var.set(str(default_ms))
-            self.device_name = ""
-            self.platform_version = ""
+        """从当前选中的配置文件读取"""
+        config_file = self._get_config_file()
+        if not os.path.exists(config_file):
+            self.log_line(f"[配置] 首次运行，使用默认配置（请填好后点「保存」）")
+            self._reset_vars_to_defaults()
             return
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            with open(config_file, "r", encoding="utf-8") as f:
                 c = json.load(f)
             self.vars["keyword"].set(c.get("keyword", ""))
             self.vars["city"].set(c.get("city", ""))
@@ -406,21 +427,62 @@ class GrabbingApp:
             for key, var in self.delay_vars.items():
                 sec = delays.get(key, DEFAULT_DELAYS.get(key, 0.5))
                 var.set(str(int(float(sec) * 1000)))
-            # 设备信息缺失时自动检测（打包版必须，否则连不上手机）
+            # 设备信息
             self.device_name = c.get("deviceName", "")
             self.platform_version = c.get("platformVersion", "")
-            # 始终以实际连接的手机为准：换手机/换电脑时自动更新设备信息
             serial, ver = self._detect_device()
             if serial and ver and (serial != self.device_name or ver != self.platform_version):
                 self.log_line(f"[配置] 检测到设备 {serial} (Android {ver})，已自动更新（原配置: {self.device_name}）")
                 self.device_name = serial
                 self.platform_version = ver
+            name_display = self.current_config_name or "默认配置"
+            self.log_line(f"[配置] 已加载: {name_display}")
         except Exception as e:
             self.log_line(f"[配置] 读取失败: {e}")
             self.device_name = ""
             self.platform_version = ""
 
+    def _reset_vars_to_defaults(self):
+        """重置所有控件为默认值"""
+        self.vars["keyword"].set("")
+        self.vars["city"].set("")
+        self.vars["date"].set("")
+        self.vars["session_index"].set("1")
+        self.vars["price"].set("")
+        self.vars["price_index"].set("1")
+        self.vars["users"].set("")
+        self.vars["if_commit_order"].set(True)
+        self.vars["submit_max_retries"].set("10")
+        for key, var in self.delay_vars.items():
+            default_ms = self.delay_defaults_ms.get(key, int(DEFAULT_DELAYS.get(key, 0.5) * 1000))
+            var.set(str(default_ms))
+        self.device_name = ""
+        self.platform_version = ""
+
+    def new_config(self):
+        """新建空白配置：清空所有输入框，不关联任何文件"""
+        self.current_config_name = ""
+        self.config_var.set("")
+        self._reset_vars_to_defaults()
+        self.log_line("[配置] 已新建空白配置（点「保存」或「另存为」存储）")
+
     def save_config(self, silent=False):
+        """保存到当前选中的配置文件（覆盖）。
+        如果当前是空白新建状态（无选中配置），则提示输入名称（等同另存为）。"""
+        # 没有选中任何配置 → 提示输入名称
+        if not self.current_config_name and self.config_var.get() not in ("", "默认配置"):
+            # 下拉框有选中项但 current_config_name 为空，说明选的是"默认配置"
+            pass
+        if not self.current_config_name and (not self.config_var.get() or self.config_var.get() == ""):
+            # 完全空白状态 → 走另存为流程
+            name = tk.simpledialog.askstring(APP_TITLE, "当前是新建配置，请输入配置名称:", parent=self.root)
+            if not name or not name.strip():
+                return
+            name = name.strip()
+            if name == "默认配置":
+                messagebox.showwarning(APP_TITLE, "不能使用'默认配置'作为名称")
+                return
+            self.current_config_name = name
         try:
             users = [u.strip() for u in self.vars["users"].get().split(",") if u.strip()]
             if not self.device_name or not self.platform_version:
@@ -443,13 +505,49 @@ class GrabbingApp:
                 "delays": {key: max(float(var.get() or 1), 1) / 1000.0
                            for key, var in self.delay_vars.items()},
             }
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            config_file = self._get_config_file()
+            os.makedirs(os.path.dirname(config_file), exist_ok=True)
+            with open(config_file, "w", encoding="utf-8") as f:
                 json.dump(c, f, ensure_ascii=False, indent=2)
-            self.log_line("[配置] 已保存")
+            name_display = self.current_config_name or "默认配置"
+            self.log_line(f"[配置] 已保存: {name_display}")
+            self._refresh_config_list()
             if not silent:
-                messagebox.showinfo(APP_TITLE, "配置已保存")
+                messagebox.showinfo(APP_TITLE, f"配置已保存: {name_display}")
         except Exception as e:
             messagebox.showerror(APP_TITLE, f"保存失败: {e}")
+
+    def save_config_as(self):
+        """另存为新配置名"""
+        name = tk.simpledialog.askstring(APP_TITLE, "请输入配置名称:", parent=self.root)
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        # 不允许和"默认配置"重名
+        if name == "默认配置":
+            messagebox.showwarning(APP_TITLE, "不能使用'默认配置'作为名称")
+            return
+        self.current_config_name = name
+        self.save_config(silent=True)
+        self.log_line(f"[配置] 另存为: {name}")
+        self._refresh_config_list()
+
+    def delete_config(self):
+        """删除当前选中的配置（默认配置不可删）"""
+        if not self.current_config_name:
+            messagebox.showwarning(APP_TITLE, "默认配置不可删除")
+            return
+        if not messagebox.askyesno(APP_TITLE, f"确认删除配置「{self.current_config_name}」?"):
+            return
+        config_file = os.path.join(CONFIGS_DIR, f"{self.current_config_name}.jsonc")
+        if os.path.exists(config_file):
+            os.remove(config_file)
+            self.log_line(f"[配置] 已删除: {self.current_config_name}")
+        self.current_config_name = ""
+        self._refresh_config_list()
+        self.load_config()
 
     # ---------- 服务器 ----------
     def server_running(self):
