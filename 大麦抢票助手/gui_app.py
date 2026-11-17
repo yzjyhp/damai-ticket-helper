@@ -53,6 +53,7 @@ else:
     sys.path.insert(0, SCRIPT_WORKDIR)
 
 CONFIG_FILE = os.path.join(SCRIPT_WORKDIR, 'config.jsonc')
+CONFIGS_DIR = os.path.join(SCRIPT_WORKDIR, 'configs')
 os.chdir(SCRIPT_WORKDIR)
 
 
@@ -78,6 +79,7 @@ class GrabbingApp:
         self.grab_stop = threading.Event()
         self.log_queue = queue.Queue()
         self.delay_defaults_ms = {}
+        self.current_config_name = ""  # 当前选中的配置名（空 = 默认 config.jsonc）
 
         self._build_ui()
         self.root.after(100, self._poll_log_queue)
@@ -198,6 +200,20 @@ class GrabbingApp:
         # ---- 抢票配置 ----
         cfg = ttk.LabelFrame(main, text="抢票配置", padding=8)
         cfg.grid(row=1, column=0, sticky="ew")
+
+        # 配置文件选择行
+        cfg_bar = ttk.Frame(cfg)
+        cfg_bar.pack(fill="x", pady=(0, 4))
+        L(cfg_bar, "配置:", size=9).pack(side="left", padx=(0, 2))
+        self.config_var = tk.StringVar()
+        self.config_combo = reg(ttk.Combobox(cfg_bar, textvariable=self.config_var, width=18, state="readonly"), size=9)
+        self.config_combo.pack(side="left", padx=2)
+        self.config_combo.bind("<<ComboboxSelected>>", self._on_config_selected)
+        reg(ttk.Button(cfg_bar, text="加载", command=self.load_config), size=9).pack(side="left", padx=2)
+        reg(ttk.Button(btns := ttk.Frame(cfg_bar), text="保存", command=self.save_config), size=9).pack(side="left", padx=2)
+        reg(ttk.Button(btns, text="另存为", command=self.save_config_as), size=9).pack(side="left", padx=2)
+        reg(ttk.Button(btns, text="删除", command=self.delete_config), size=9).pack(side="left", padx=2)
+
         grid = ttk.Frame(cfg)
         grid.pack(anchor="w")   # 左对齐、自然宽度，标签不被挤
         self.vars = {}
@@ -226,10 +242,6 @@ class GrabbingApp:
         L(grid, "提交重试(0=无限)", size=9).grid(row=3, column=2, sticky="w", padx=4, pady=3)
         self.vars["submit_max_retries"] = tk.StringVar(value="10")
         reg(ttk.Entry(grid, textvariable=self.vars["submit_max_retries"], width=5), size=9).grid(row=3, column=3, sticky="w", padx=4, pady=3)
-        btns = ttk.Frame(cfg)
-        btns.pack(fill="x", pady=4)
-        reg(ttk.Button(btns, text="保存配置", command=self.save_config), size=9).pack(side="left", padx=4)
-        reg(ttk.Button(btns, text="读取配置", command=self.load_config), size=9).pack(side="left", padx=4)
 
         # ---- 抢票操作 ----
         act = ttk.LabelFrame(main, text="抢票操作", padding=8)
@@ -287,6 +299,7 @@ class GrabbingApp:
 
         # 窗口缩放 → 字体随窗口缩放（防抖）
         self.root.bind("<Configure>", self._on_resize)
+        self._refresh_config_list()
         self.load_config()
 
     def _on_resize(self, event=None):
