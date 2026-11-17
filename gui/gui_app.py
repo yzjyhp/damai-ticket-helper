@@ -244,7 +244,9 @@ class GrabbingApp:
         reg(ttk.Entry(grid, textvariable=self.vars["submit_max_retries"], width=5), size=9).grid(row=3, column=3, sticky="w", padx=4, pady=3)
 
         # ---- 抢票操作 ----
+        # 创建带标题的容器框，标题"抢票操作"，内边距8
         act = ttk.LabelFrame(main, text="抢票操作", padding=8)
+        # 放到 main 第3行（row=2），左右拉伸填满
         act.grid(row=2, column=0, sticky="ew")
         # 开售秒抢：绿色高亮 + 上方提示（唯一抢票入口，有票/等票都用它）
         wait_box = ttk.Frame(act)
@@ -315,7 +317,7 @@ class GrabbingApp:
         w = self.root.winfo_width()
         if w <= 0:
             return
-        scale = max(0.65, min(w / 880.0, 2.2))
+        scale = max(0.65, min(w / 1056.0, 2.2))
         new_sizes = {base: max(int(base * scale), 7) for _, base, _ in self._font_registry}
         if new_sizes == getattr(self, '_last_font_sizes', None):
             return
