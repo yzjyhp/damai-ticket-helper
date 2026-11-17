@@ -71,8 +71,8 @@ class GrabbingApp:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("880x720")
-        self.root.minsize(780, 620)
+        self.root.geometry("1056x864")
+        self.root.minsize(936, 744)
 
         self.appium_proc = None
         self.grab_thread = None
@@ -316,7 +316,7 @@ class GrabbingApp:
         if w <= 0:
             return
         scale = max(0.65, min(w / 880.0, 2.2))
-        new_sizes = {base: max(int(base * scale), 7) for base, _, _ in self._font_registry}
+        new_sizes = {base: max(int(base * scale), 7) for _, base, _ in self._font_registry}
         if new_sizes == getattr(self, '_last_font_sizes', None):
             return
         self._last_font_sizes = new_sizes

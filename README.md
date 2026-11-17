@@ -38,6 +38,7 @@
 - ✅ 多配置管理（保存多套配置，下拉切换，另存为/删除）
 - ✅ 进程级联清理（关闭 exe 时自动清理 Appium/Node/adb）
 - ✅ 环境自动修复（路径自动适配，换目录不出错）
+- ✅ 启动逐步校验（4 项环境检查，缺失模块自动按需解压，带进度窗口）
 
 ---
 
@@ -51,6 +52,7 @@
 - **循环抢票**：已开售且票抢手时反复重试
 - **提交重试**：提交订单失败时自动循环重试，次数可配置
 - **环境自修复**：换目录/换电脑自动修正 Appium 驱动路径
+- **启动校验**：4 项环境逐步检查，缺失模块自动按需解压，带进度窗口
 - **进程管理**：关闭程序时级联清理所有子进程（Appium/Node/adb）
 
 ---
@@ -59,33 +61,56 @@
 
 ```
 damai-ticket-helper/
-├── damai/                     # Web 端抢票（继承原项目）
-│   ├── damai.py
-│   ├── config.py              # 配置类
-│   └── concert.py             # 抢票逻辑
+├── gui/                       # 可视化软件（GUI）
+│   ├── gui_app.py             # GUI 源码（主界面、配置管理、抢票控制）
+│   ├── config.example.jsonc   # 配置示例
+│   └── 使用说明.txt           # 用户使用说明
 ├── damai_appium/              # 移动端抢票（核心）
-│   ├── damai_app_v2.py        # 主程序
+│   ├── damai_app_v2.py        # 主程序（新版，适配大麦 9.x）
 │   ├── damai_app.py           # 原版主程序
+│   ├── config.py              # 配置类（含 submit_max_retries 等字段）
+│   ├── config.example.jsonc   # 配置示例
+│   ├── config.json            # 运行时配置
+│   └── app.md                 # Appium 相关说明
+├── damai/                     # Web 端抢票（继承原项目）
+│   ├── damai.py               # 主程序 + load_config
+│   ├── concert.py             # 抢票逻辑（选票/提交/检测）
 │   ├── config.py              # 配置类
-│   └── config.example.jsonc   # 配置示例
-├── 大麦抢票助手/              # 可视化软件
-│   ├── gui_app.py             # GUI 源码
-│   ├── 使用说明.txt
-│   └── config.example.jsonc   # 配置示例
+│   ├── config.json            # 运行时配置
+│   ├── check_environment.py   # 环境检查
+│   ├── quick_diagnosis.py     # 快速诊断
+│   └── requirements.txt       # Python 依赖
 ├── exe-packer/                # exe 打包工具
-│   ├── 一键打包.bat           # 双击即可打包
-│   ├── build.py               # 打包脚本
-│   ├── build.spec             # PyInstaller 配置
-│   ├── bootstrap.py           # exe 启动引导器（首次解压 env，带进度窗口）
+│   ├── 一键打包.bat           # 双击即可打包（检查 Python→检查依赖→清理→打包）
+│   ├── build.py               # 打包脚本（检查依赖→检查源码→检查 zip→PyInstaller）
+│   ├── build.spec             # PyInstaller 配置（onefile 模式）
+│   ├── bootstrap.py           # exe 启动引导器（逐步校验+按需解压，带进度窗口）
 │   ├── install_env.py         # 环境检测脚本（纯离线）
-│   ├── env_bundle.zip         # env 环境压缩包（97MB）
-│   └── README.md              # 打包说明
+│   ├── env_bundle.zip         # env 环境压缩包（97MB，含 node/appium/platform-tools）
+│   └── README.md              # 打包详细说明
 ├── tests/                     # 测试
+│   ├── conftest.py
+│   ├── test_setup_validation.py
+│   ├── unit/                  # 单元测试
+│   └── integration/           # 集成测试
 ├── doc/                       # 文档
-└── README.md
+│   └── 大麦抢票流程.drawio    # 流程图源文件
+├── img/                       # 截图
+│   ├── config_json.png
+│   ├── example.png
+│   ├── example_detail.png
+│   └── 大麦抢票流程.png
+├── pyproject.toml             # 项目配置（Poetry）
+├── poetry.lock                # 依赖锁定
+├── start_appium.sh            # 启动 Appium 服务脚本
+├── start_ticket_grabbing.sh   # 启动抢票脚本
+├── check_environment.sh       # 环境检查脚本
+├── QUICK_START.md             # 快速开始指南
+├── 完整使用指南(PC端).md       # PC 端完整使用指南
+└── README.md                  # 本文件
 ```
 
-> 注：`env/`（运行环境）、`抢票助手.exe`（打包产物）等二进制/大文件不提交仓库，用户本地自行准备或通过 exe-packer 打包。
+> 注：`env/`（运行环境）、`抢票助手.exe`（打包产物）、`configs/`（用户配置）等运行时生成文件不提交仓库。
 
 ---
 
@@ -138,7 +163,7 @@ cp config.example.jsonc config.jsonc
 appium --port 4999
 
 # 方式 A：GUI 界面运行
-cd 大麦抢票助手
+cd gui
 python gui_app.py
 
 # 方式 B：命令行直接运行（需手机连接 + USB调试 + 安装大麦APP）
@@ -236,17 +261,53 @@ GUI 支持保存多套配置，快速切换不同演出：
 
 ## exe 运行机制
 
+### 启动流程（每次启动自动执行）
+
+双击 `抢票助手.exe` → 显示带步骤列表的进度窗口 → 逐项校验环境：
+
+```
+┌──────────────────────────────────────────┐
+│            大麦抢票助手                    │
+│       正在检查运行环境，请稍候...          │
+│                                          │
+│  1. Node.js 运行环境              OK      │  ← 绿色，已通过
+│  2. Appium 自动化服务            OK       │  ← 绿色，已通过
+│  3. uiautomator2 驱动            OK       │  ← 绿色，已通过
+│  4. Android Debug Bridge (adb)  解压中.. │  ← 橙色，正在修复
+│                                          │
+│  步骤 4/4: adb 缺失，正在解压...          │
+│  ████████████████░░░░░░░░  75%           │  ← 主进度条（整体步骤）
+│                                          │
+│  解压中... 1200/3500                     │
+│  ████████░░░░░░░░░░░░░░░  34%           │  ← 子进度条（模块解压）
+└──────────────────────────────────────────┘
+```
+
+每项检查的逻辑：
+
+| 步骤 | 组件 | 校验方式 | 缺失时 |
+|------|------|---------|--------|
+| 1 | Node.js | 执行 `node --version` | 从 zip 解压 `node/` 模块 |
+| 2 | Appium | 检查 `main.js` 存在 | 从 zip 解压 `appium/` 模块 |
+| 3 | uiautomator2 驱动 | 检查 `package.json` 可读 | 随 appium 模块一起解压 |
+| 4 | adb | 执行 `adb version` | 从 zip 解压 `platform-tools/` 模块 |
+
+- 每项标记状态：`...`（检查中）→ `OK`（通过，绿色）/ `解压中...`（橙色）/ `已修复`（绿色）/ `FAIL`（红色）
+- 缺失的模块**只解压该模块的文件**（不全部解压），子进度条显示文件级进度
+- 解压后自动修复 Appium 驱动路径，然后重新校验
+- 全部通过后启动 GUI
+
 ### 首次运行
 
-双击 `抢票助手.exe` → 显示进度窗口（标题 + 进度条 + 百分比）→ 自动解压运行环境到 exe 同级目录 `env/`（约 30 秒）→ 自动修正 Appium 驱动路径 → 启动 GUI 主界面。
+所有模块都不存在 → 逐个解压（步骤 1→4 依次执行，每步有子进度条）→ 全部修复 → 启动 GUI。
 
 ### 后续运行
 
-env 已存在 → 直接启动 GUI，秒开。
+所有模块已存在且校验通过 → 进度窗口快速滑过（约2秒）→ 启动 GUI。
 
 ### 环境损坏/换目录
 
-点「一键检测环境」→ 从 exe 内嵌的 `env_bundle.zip` 重新解压恢复 → 自动修正路径。纯离线，不联网。
+某项校验失败 → 该模块自动重新解压 → 修复路径 → 重新校验。纯离线，不联网。
 
 ### 关闭程序
 
@@ -307,7 +368,7 @@ taskkill /F /IM adb.exe
 
 ### 首次启动慢
 
-首次运行需要解压运行环境（约 97MB 压缩包 → 271MB），约 30 秒。会显示进度窗口，不是卡死。之后启动秒开。
+首次运行需要逐项解压运行环境（Node.js + Appium + adb，约 97MB 压缩包），约 30 秒。会显示带步骤列表和进度条的窗口，可以看到每一步的检查/解压进度，不是卡死。后续启动如果环境完好，约 2 秒快速校验后启动。
 
 ### Appium 驱动找不到
 
@@ -324,7 +385,7 @@ exe-packer/
 ├── 一键打包.bat        ← 双击即可打包
 ├── build.py            ← 打包脚本（检查依赖 → 检查源码 → 检查 zip → PyInstaller）
 ├── build.spec          ← PyInstaller 配置（onefile 模式）
-├── bootstrap.py        ← exe 启动引导器（首次解压 env，带进度窗口，自动修正路径）
+├── bootstrap.py        ← exe 启动引导器（逐步校验+按需解压，带步骤进度窗口，自动修正路径）
 ├── install_env.py      ← 环境检测脚本（纯离线）
 ├── env_bundle.zip      ← env 环境压缩包（97MB）
 └── README.md           ← 详细说明
